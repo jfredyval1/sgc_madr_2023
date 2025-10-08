@@ -45,9 +45,76 @@ if("Conduct" %in% names(puntos)) {
   )
 }
 
-# 5.2 Clasificación por quantiles para otras variables
-for(var in variables) {
-  if(var %in% names(puntos) && var != "Conduct") {
+# 5.2 Clasificación según Resolución 2115 de 2007 para variables con límite
+# Arsénico
+if("As_ugl" %in% names(puntos)) {
+  puntos$As_ugl_clase <- cut(
+    puntos$As_ugl,
+    breaks = c(0, 10, Inf),
+    labels = c("Admisible", "No admisible"),
+    include.lowest = TRUE,
+    right = FALSE
+  )
+}
+
+# Cadmio
+if("Cd_ugl" %in% names(puntos)) {
+  puntos$Cd_ugl_clase <- cut(
+    puntos$Cd_ugl,
+    breaks = c(0, 3, Inf),
+    labels = c("Admisible", "No admisible"),
+    include.lowest = TRUE,
+    right = FALSE
+  )
+}
+
+# Plomo
+if("Pb_ugl" %in% names(puntos)) {
+  puntos$Pb_ugl_clase <- cut(
+    puntos$Pb_ugl,
+    breaks = c(0, 10, Inf),
+    labels = c("Admisible", "No admisible"),
+    include.lowest = TRUE,
+    right = FALSE
+  )
+}
+
+# Fluoruros
+if("F_mgL" %in% names(puntos)) {
+  puntos$F_mgL_clase <- cut(
+    puntos$F_mgL,
+    breaks = c(0, 1, Inf),
+    labels = c("Admisible", "No admisible"),
+    include.lowest = TRUE,
+    right = FALSE
+  )
+}
+
+# Sulfatos
+if("SO4_mgL" %in% names(puntos)) {
+  puntos$SO4_mgL_clase <- cut(
+    puntos$SO4_mgL,
+    breaks = c(0, 250, Inf),
+    labels = c("Admisible", "No admisible"),
+    include.lowest = TRUE,
+    right = FALSE
+  )
+}
+
+# Cobalto (Decreto 1076 de 2015 - uso agrícola)
+if("Co_ugl" %in% names(puntos)) {
+  puntos$Co_ugl_clase <- cut(
+    puntos$Co_ugl,
+    breaks = c(0, 50, Inf),
+    labels = c("Admisible", "No admisible"),
+    include.lowest = TRUE,
+    right = FALSE
+  )
+}
+
+# 5.3 Clasificación por quantiles para otras variables (Sodio)
+for(var in c("Na_mgl")) {
+  if(var %in% names(puntos)) {
     puntos[[paste0(var, "_clase")]] <- cut(
       puntos[[var]],
       breaks = quantile(puntos[[var]], probs = seq(0, 1, 0.2), na.rm = TRUE),
@@ -59,16 +126,21 @@ for(var in variables) {
 }
 
 # 6. Paletas de colores
-# Paleta para conductividad (salinidad) - orden invertido para que mejor calidad sea verde
+# Paleta para conductividad (salinidad)
 colores_salinidad <- c('#4d9221', '#a1d76a', '#e6f5d0', '#fde0ef', '#e9a3c9', '#c51b7d')
 pal_salinidad <- colorFactor(palette = colores_salinidad,
                              levels = c("No salina", "Ligeramente salina", "Moderadamente salina",
                                        "Altamente salina", "Extremadamente salina", "Salmuera"))
 
+# Paleta para variables con límite de admisibilidad (Resolución 2115 de 2007)
+colores_admisibilidad <- c('#4d9221', '#d7191c')
+pal_admisibilidad <- colorFactor(palette = colores_admisibilidad,
+                                 levels = c("Admisible", "No admisible"))
+
 # Paleta para otras variables (quantiles)
-colores <- c("#2c7bb6", "#abd9e9", "#ffffbf", "#fdae61", "#d7191c")
-pal <- colorFactor(palette = colores,
-                   levels = c("Muy Bajo", "Bajo", "Medio", "Alto", "Muy Alto"))
+colores_cuantiles <- c("#2c7bb6", "#abd9e9", "#ffffbf", "#fdae61", "#d7191c")
+pal_cuantiles <- colorFactor(palette = colores_cuantiles,
+                             levels = c("Muy Bajo", "Bajo", "Medio", "Alto", "Muy Alto"))
 
 # 7. Crear mapa base
 mapa <- leaflet(puntos) %>%
@@ -90,7 +162,13 @@ for(var in variables) {
     radios[is.na(radios)] <- 5
     
     # Seleccionar paleta según la variable
-    pal_actual <- if(var == "Conduct") pal_salinidad else pal
+    if(var == "Conduct") {
+      pal_actual <- pal_salinidad
+    } else if(var %in% c("As_ugl", "Cd_ugl", "Pb_ugl", "F_mgL", "SO4_mgL", "Co_ugl")) {
+      pal_actual <- pal_admisibilidad
+    } else {
+      pal_actual <- pal_cuantiles
+    }
 
     mapa <- mapa %>%
       addCircleMarkers(
@@ -161,68 +239,50 @@ js_code <- HTML('
       "As_ugl": {
         title: "Arsénico (μg/L)",
         categories: [
-          {color: "#2c7bb6", label: "Muy Bajo"},
-          {color: "#abd9e9", label: "Bajo"},
-          {color: "#ffffbf", label: "Medio"},
-          {color: "#fdae61", label: "Alto"},
-          {color: "#d7191c", label: "Muy Alto"}
+          {color: "#4d9221", label: "Admisible", range: "<10"},
+          {color: "#d7191c", label: "No admisible", range: "≥10"}
         ],
-        footer: "Clasificación por cuantiles"
+        footer: "Resolución 2115 de 2007"
       },
       "Cd_ugl": {
         title: "Cadmio (μg/L)",
         categories: [
-          {color: "#2c7bb6", label: "Muy Bajo"},
-          {color: "#abd9e9", label: "Bajo"},
-          {color: "#ffffbf", label: "Medio"},
-          {color: "#fdae61", label: "Alto"},
-          {color: "#d7191c", label: "Muy Alto"}
+          {color: "#4d9221", label: "Admisible", range: "<3"},
+          {color: "#d7191c", label: "No admisible", range: "≥3"}
         ],
-        footer: "Clasificación por cuantiles"
+        footer: "Resolución 2115 de 2007"
       },
       "Co_ugl": {
         title: "Cobalto (μg/L)",
         categories: [
-          {color: "#2c7bb6", label: "Muy Bajo"},
-          {color: "#abd9e9", label: "Bajo"},
-          {color: "#ffffbf", label: "Medio"},
-          {color: "#fdae61", label: "Alto"},
-          {color: "#d7191c", label: "Muy Alto"}
+          {color: "#4d9221", label: "Admisible", range: "<50"},
+          {color: "#d7191c", label: "No admisible", range: "≥50"}
         ],
-        footer: "Clasificación por cuantiles"
+        footer: "Decreto 1076 de 2015 (uso agrícola)"
       },
       "Pb_ugl": {
         title: "Plomo (μg/L)",
         categories: [
-          {color: "#2c7bb6", label: "Muy Bajo"},
-          {color: "#abd9e9", label: "Bajo"},
-          {color: "#ffffbf", label: "Medio"},
-          {color: "#fdae61", label: "Alto"},
-          {color: "#d7191c", label: "Muy Alto"}
+          {color: "#4d9221", label: "Admisible", range: "<10"},
+          {color: "#d7191c", label: "No admisible", range: "≥10"}
         ],
-        footer: "Clasificación por cuantiles"
+        footer: "Resolución 2115 de 2007"
       },
       "F_mgL": {
         title: "Fluoruros (mg/L)",
         categories: [
-          {color: "#2c7bb6", label: "Muy Bajo"},
-          {color: "#abd9e9", label: "Bajo"},
-          {color: "#ffffbf", label: "Medio"},
-          {color: "#fdae61", label: "Alto"},
-          {color: "#d7191c", label: "Muy Alto"}
+          {color: "#4d9221", label: "Admisible", range: "<1"},
+          {color: "#d7191c", label: "No admisible", range: "≥1"}
         ],
-        footer: "Clasificación por cuantiles"
+        footer: "Resolución 2115 de 2007"
       },
       "SO4_mgL": {
         title: "Sulfatos (mg/L)",
         categories: [
-          {color: "#2c7bb6", label: "Muy Bajo"},
-          {color: "#abd9e9", label: "Bajo"},
-          {color: "#ffffbf", label: "Medio"},
-          {color: "#fdae61", label: "Alto"},
-          {color: "#d7191c", label: "Muy Alto"}
+          {color: "#4d9221", label: "Admisible", range: "<250"},
+          {color: "#d7191c", label: "No admisible", range: "≥250"}
         ],
-        footer: "Clasificación por cuantiles"
+        footer: "Resolución 2115 de 2007"
       },
       "Na_mgl": {
         title: "Sodio (mg/L)",
