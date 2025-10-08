@@ -9,7 +9,7 @@ rm(list = ls())
 # 1. Leer datos
 # Rutas
 path_gpkg = '/home/jfvl/Documentos/Guajira/DRM.gpkg'
-path_map = '/home/jfvl/Documentos/Guajira/html/mapa_drm.html'
+path_map = '/home/jfvl/Documentos/Guajira/docs/index.html'
 
 inv <- st_read(path_gpkg, layer = "inventario")
 valores_fq <- st_read(path_gpkg, layer = "muestreo_fq", quiet = TRUE) %>% 
@@ -259,6 +259,7 @@ js_code <- HTML('
       html += "<div style=\\"clear: both; margin-top: 5px;\\"><small>" + info.footer + "</small></div>";
       div.innerHTML = html;
     }
+    
 
     // Escuchar cambios de capa
     map.on("baselayerchange", function(e) {
@@ -279,3 +280,4 @@ saveWidget(mapa, path_map, selfcontained = TRUE)
 
 # Ver en navegador
 browseURL(path_map)
+
