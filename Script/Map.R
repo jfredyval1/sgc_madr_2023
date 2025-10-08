@@ -14,10 +14,12 @@ path_map = '/home/jfvl/Documentos/Guajira/docs/index.html'
 inv <- st_read(path_gpkg, layer = "inventario")
 valores_fq <- st_read(path_gpkg, layer = "muestreo_fq", quiet = TRUE) %>% 
   st_drop_geometry()  # No tiene geometría
-
+# Renombrar CE por CE
+valores_fq <- valores_fq %>%
+  mutate(variable = ifelse(variable == "Conduct", "CE", variable))
 # 2. Pivotar valores de largo a ancho (una columna por variable)
 datos_wide <- valores_fq %>%
-  filter(censurado == "NO") %>%  # Filtrar censurados si es necesario
+#  filter(censurado == "NO") %>%  # Filtrar censurados si es necesario
   select(fk_id_punto, variable, valor) %>%
   pivot_wider(
     names_from = variable,
@@ -27,16 +29,16 @@ datos_wide <- valores_fq %>%
 
 # 3. Join con geometría
 puntos <- inv %>%
-  left_join(datos_wide, by = c("ID" = "fk_id_punto"))
+  right_join(datos_wide, by = c("ID" = "fk_id_punto"))
 
 # 4. Definir las variables a mapear
-variables <- c("Conduct", "As_ugl", "Cd_ugl", "Co_ugl", "Pb_ugl", "F_mgL", "SO4_mgL", "Na_mgl")
+variables <- c("CE", "As_ugl", "Cd_ugl", "Co_ugl", "Pb_ugl", "F_mgL", "SO4_mgL", "Na_mgl")
 
 # 5. Clasificar cada variable
-# 5.1 Clasificación especial para Conductividad (Rhoades et al., 1992)
-if("Conduct" %in% names(puntos)) {
-  puntos$Conduct_clase <- cut(
-    puntos$Conduct,
+# 5.1 Clasificación especial para CE (Rhoades et al., 1992)
+if("CE" %in% names(puntos)) {
+  puntos$CE_clase <- cut(
+    puntos$CE,
     breaks = c(0, 700, 2000, 10000, 25000, 45000, Inf),
     labels = c("No salina", "Ligeramente salina", "Moderadamente salina",
                "Altamente salina", "Extremadamente salina", "Salmuera"),
@@ -118,7 +120,7 @@ for(var in c("Na_mgl")) {
     puntos[[paste0(var, "_clase")]] <- cut(
       puntos[[var]],
       breaks = quantile(puntos[[var]], probs = seq(0, 1, 0.2), na.rm = TRUE),
-      labels = c("Muy Bajo", "Bajo", "Medio", "Alto", "Muy Alto"),
+      labels = c("Cuantil 1", "Cuantil 2", "Cuantil 3", "Cuantil 4", "Cuantil 5"),
       include.lowest = TRUE,
       right = FALSE
     )
@@ -126,11 +128,11 @@ for(var in c("Na_mgl")) {
 }
 
 # 6. Paletas de colores
-# Paleta para conductividad (salinidad)
-colores_salinidad <- c('#4d9221', '#a1d76a', '#e6f5d0', '#fde0ef', '#e9a3c9', '#c51b7d')
+# Paleta para CE (salinidad)
+colores_salinidad <- c('#00441b', '#a6dba0', '#9970ab', '#762a83')
 pal_salinidad <- colorFactor(palette = colores_salinidad,
                              levels = c("No salina", "Ligeramente salina", "Moderadamente salina",
-                                       "Altamente salina", "Extremadamente salina", "Salmuera"))
+                                       "Altamente salina"))
 
 # Paleta para variables con límite de admisibilidad (Resolución 2115 de 2007)
 colores_admisibilidad <- c('#4d9221', '#d7191c')
@@ -140,7 +142,7 @@ pal_admisibilidad <- colorFactor(palette = colores_admisibilidad,
 # Paleta para otras variables (quantiles)
 colores_cuantiles <- c("#2c7bb6", "#abd9e9", "#ffffbf", "#fdae61", "#d7191c")
 pal_cuantiles <- colorFactor(palette = colores_cuantiles,
-                             levels = c("Muy Bajo", "Bajo", "Medio", "Alto", "Muy Alto"))
+                             levels = c("Cuantil 1", "Cuantil 2", "Cuantil 3", "Cuantil 4", "Cuantil 5"))
 
 # 7. Crear mapa base
 mapa <- leaflet(puntos) %>%
@@ -162,7 +164,7 @@ for(var in variables) {
     radios[is.na(radios)] <- 5
     
     # Seleccionar paleta según la variable
-    if(var == "Conduct") {
+    if(var == "CE") {
       pal_actual <- pal_salinidad
     } else if(var %in% c("As_ugl", "Cd_ugl", "Pb_ugl", "F_mgL", "SO4_mgL", "Co_ugl")) {
       pal_actual <- pal_admisibilidad
@@ -183,6 +185,7 @@ for(var in variables) {
           "<b>ID:</b> ", ID, "<br>",
           "<b>Nombre:</b> ", Nombre_Pun, "<br>",
           "<b>Tipo:</b> ", Tipo_P, "<br>",
+          "<b>Profundidad (m):</b> ", Prof_punto, "<br>",
           "<b>", var, ":</b> ", round(puntos[[var]], 2), "<br>",
           "<b>Clase:</b> ", puntos[[paste0(var, "_clase")]]
         )
@@ -198,11 +201,35 @@ mapa <- mapa %>%
   ) %>%
   hideGroup(variables[-1])
 
-# 10. Agregar control HTML para la leyenda dinámica
+# 10. Calcular rangos de valores para cada variable
+rangos_vars <- list()
+for(var in variables) {
+  if(var %in% names(puntos)) {
+    valores <- puntos[[var]]
+    valores <- valores[!is.na(valores)]
+    if(length(valores) > 0) {
+      rangos_vars[[var]] <- list(
+        min = round(min(valores), 2),
+        max = round(max(valores), 2),
+        unit = case_when(
+          var == "CE" ~ "μS/cm",
+          var %in% c("As_ugl", "Cd_ugl", "Co_ugl", "Pb_ugl") ~ "μg/L",
+          var %in% c("F_mgL", "SO4_mgL", "Na_mgl") ~ "mg/L",
+          TRUE ~ ""
+        )
+      )
+    }
+  }
+}
+
+# Convertir a JSON para JavaScript
+rangos_json <- jsonlite::toJSON(rangos_vars, auto_unbox = TRUE)
+
+# 11. Agregar control HTML para la leyenda dinámica
 library(htmltools)
 
 # JavaScript para leyenda dinámica
-js_code <- HTML('
+js_code <- HTML(paste0('
 <script>
   // Esperar a que el mapa se cargue
   setTimeout(function() {
@@ -224,15 +251,13 @@ js_code <- HTML('
 
     // Definir información para cada variable
     var varInfo = {
-      "Conduct": {
-        title: "Conductividad (μS·cm⁻¹)",
+      "CE": {
+        title: "Conductividad eléctrica (μS·cm⁻¹)",
         categories: [
-          {color: "#4d9221", label: "No salina", range: "<700"},
-          {color: "#a1d76a", label: "Ligeramente salina", range: "700-2000"},
-          {color: "#e6f5d0", label: "Moderadamente salina", range: "2000-10000"},
-          {color: "#fde0ef", label: "Altamente salina", range: "10000-25000"},
-          {color: "#e9a3c9", label: "Extremadamente salina", range: "25000-45000"},
-          {color: "#c51b7d", label: "Salmuera", range: ">45000"}
+          {color: "#00441b", label: "No salina", range: "<700"},
+          {color: "#a6dba0", label: "Ligeramente salina", range: "700-2000"},
+          {color: "#9970ab", label: "Moderadamente salina", range: "2000-10000"},
+          {color: "#762a83", label: "Altamente salina", range: "10000-25000"}
         ],
         footer: "Rhoades et al., 1992"
       },
@@ -287,11 +312,11 @@ js_code <- HTML('
       "Na_mgl": {
         title: "Sodio (mg/L)",
         categories: [
-          {color: "#2c7bb6", label: "Muy Bajo"},
-          {color: "#abd9e9", label: "Bajo"},
-          {color: "#ffffbf", label: "Medio"},
-          {color: "#fdae61", label: "Alto"},
-          {color: "#d7191c", label: "Muy Alto"}
+          {color: "#2c7bb6", label: "Cuantil 1"},
+          {color: "#abd9e9", label: "Cuantil 2"},
+          {color: "#ffffbf", label: "Cuantil 3"},
+          {color: "#fdae61", label: "Cuantil 4"},
+          {color: "#d7191c", label: "Cuantil 5"}
         ],
         footer: "Clasificación por cuantiles"
       }
@@ -326,18 +351,70 @@ js_code <- HTML('
       updateLegend(e.name);
     });
 
-    // Inicializar con Conductividad
-    updateLegend("Conduct");
+    // Inicializar con Coductividad eléctrica
+    updateLegend("CE");
+
+    // Crear leyenda de tamaños (símbolos proporcionales)
+    var sizeLegend = L.control({position: "bottomleft"});
+
+    sizeLegend.onAdd = function(map) {
+      var div = L.DomUtil.create("div", "info size-legend");
+      div.style.backgroundColor = "white";
+      div.style.padding = "10px";
+      div.style.borderRadius = "5px";
+      div.style.boxShadow = "0 0 15px rgba(0,0,0,0.2)";
+      return div;
+    };
+
+    sizeLegend.addTo(map);
+
+    // Rangos de valores para cada variable (calculados desde R)
+    var varRanges = ', rangos_json, ';
+
+    // Función para actualizar la leyenda de tamaños
+    function updateSizeLegend(varName) {
+      var div = document.querySelector(".size-legend");
+      var range = varRanges[varName];
+
+      if(!range) {
+        div.innerHTML = "<h4 style=\\"margin: 0 0 5px; font-size: 14px;\\">Tamaño del símbolo</h4>" +
+          "<div style=\\"text-align: center;\\"><small>Proporcional al valor</small></div>";
+        return;
+      }
+
+      var min = range.min;
+      var max = range.max;
+      var mid = (min + max) / 2;
+      var unit = range.unit;
+
+      div.innerHTML = "<h4 style=\\"margin: 0 0 5px; font-size: 14px;\\">Tamaño del símbolo</h4>" +
+        "<div style=\\"text-align: center;\\"><small>Proporcional al valor</small></div>" +
+        "<div style=\\"margin-top: 8px;\\"><svg width=\\"140\\" height=\\"60\\">" +
+        "<circle cx=\\"25\\" cy=\\"50\\" r=\\"5\\" fill=\\"#666\\" opacity=\\"0.5\\"/>" +
+        "<text x=\\"35\\" y=\\"53\\" font-size=\\"9\\">" + min.toFixed(1) + " " + unit + "</text>" +
+        "<circle cx=\\"25\\" cy=\\"30\\" r=\\"12\\" fill=\\"#666\\" opacity=\\"0.5\\"/>" +
+        "<text x=\\"42\\" y=\\"33\\" font-size=\\"9\\">" + mid.toFixed(0) + " " + unit + "</text>" +
+        "<circle cx=\\"25\\" cy=\\"25\\" r=\\"20\\" fill=\\"#666\\" opacity=\\"0.5\\"/>" +
+        "<text x=\\"50\\" y=\\"10\\" font-size=\\"9\\">" + max.toFixed(0) + " " + unit + "</text>" +
+        "</svg></div>";
+    }
+
+    // Escuchar cambios de capa para actualizar leyenda de tamaños
+    map.on("baselayerchange", function(e) {
+      updateSizeLegend(e.name);
+    });
+
+    // Inicializar leyenda de tamaños con Conductividad eléctrica
+    updateSizeLegend("CE");
 
   }, 1000);
 </script>
-')
+'))
 
 mapa <- htmlwidgets::prependContent(mapa, js_code)
 
-# 11. Guardar
+# 12. Guardar
 saveWidget(mapa, path_map, selfcontained = TRUE)
 
 # Ver en navegador
 browseURL(path_map)
-
