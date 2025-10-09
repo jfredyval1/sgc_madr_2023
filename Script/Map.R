@@ -1,6 +1,6 @@
 library(sf)
-library(dplyr)
 library(tidyr)
+library(dplyr)
 library(leaflet)
 library(htmlwidgets)
 
@@ -11,6 +11,19 @@ rm(list = ls())
 path_gpkg = '/home/jfvl/Documentos/Guajira/DRM.gpkg'
 path_map = '/home/jfvl/Documentos/Guajira/docs/index.html'
 
+# Lectura de área y puntos DRM para contexto espacial
+aoi <- st_read(path_gpkg, layer = "aoi_drm")
+# Puntos muestroe DRM
+drm_points <- st_read(path_gpkg, layer = "drm_puntos")
+# MHC 2016 - Inventario
+inv_2016 <- st_read(path_gpkg, layer = "inv_mhc_2016")
+# Filtrar solo por Uribia
+inv_2016 <- inv_2016[inv_2016$municipio == 'URIBIA',]
+# Renombrar columna ce a CE (mayúscula) para consistencia
+names(inv_2016)[names(inv_2016) == 'ce'] <- 'CE'
+# Filtrar por muestras
+drm_points<- drm_points[drm_points$tipo_dato == 'Muestra',]
+# Lectura de datos base puntuales
 inv <- st_read(path_gpkg, layer = "inventario")
 valores_fq <- st_read(path_gpkg, layer = "muestreo_fq", quiet = TRUE) %>% 
   st_drop_geometry()  # No tiene geometría
@@ -32,13 +45,25 @@ puntos <- inv %>%
   right_join(datos_wide, by = c("ID" = "fk_id_punto"))
 
 # 4. Definir las variables a mapear
-variables <- c("CE", "As_ugl", "Cd_ugl", "Co_ugl", "Pb_ugl", "F_mgL", "SO4_mgL", "Na_mgl")
+variables <- c("CE","CE_MHC","Na_mgl","Cl_mgL","SO4_mgL","F_mgL", "As_ugl", "Co_ugl", "Pb_ugl","Cd_ugl" )
 
 # 5. Clasificar cada variable
 # 5.1 Clasificación especial para CE (Rhoades et al., 1992)
 if("CE" %in% names(puntos)) {
   puntos$CE_clase <- cut(
     puntos$CE,
+    breaks = c(0, 700, 2000, 10000, 25000, 45000, Inf),
+    labels = c("No salina", "Ligeramente salina", "Moderadamente salina",
+               "Altamente salina", "Extremadamente salina", "Salmuera"),
+    include.lowest = TRUE,
+    right = FALSE
+  )
+}
+
+# 5.1b Clasificación para CE_MHC en inv_2016 (mismo criterio que CE)
+if("CE" %in% names(inv_2016)) {
+  inv_2016$CE_clase <- cut(
+    inv_2016$CE,
     breaks = c(0, 700, 2000, 10000, 25000, 45000, Inf),
     labels = c("No salina", "Ligeramente salina", "Moderadamente salina",
                "Altamente salina", "Extremadamente salina", "Salmuera"),
@@ -69,6 +94,17 @@ if("Cd_ugl" %in% names(puntos)) {
     right = FALSE
   )
 }
+# Cloruros
+if("Cl_mgL" %in% names(puntos)) {
+  puntos$Cl_mgL_clase <- cut(
+    puntos$Cl_mgL,
+    breaks = c(0, 250, Inf),
+    labels = c("Admisible", "No admisible"),
+    include.lowest = TRUE,
+    right = FALSE
+  )
+}
+
 
 # Plomo
 if("Pb_ugl" %in% names(puntos)) {
@@ -115,11 +151,17 @@ if("Co_ugl" %in% names(puntos)) {
 }
 
 # 5.3 Clasificación por quantiles para otras variables (Sodio)
+# Guardar los rangos de cuantiles para la leyenda
+cuantiles_Na <- NULL
 for(var in c("Na_mgl")) {
   if(var %in% names(puntos)) {
+    # Calcular cuantiles
+    breaks_Na <- quantile(puntos[[var]], probs = seq(0, 1, 0.2), na.rm = TRUE)
+    cuantiles_Na <- breaks_Na
+
     puntos[[paste0(var, "_clase")]] <- cut(
       puntos[[var]],
-      breaks = quantile(puntos[[var]], probs = seq(0, 1, 0.2), na.rm = TRUE),
+      breaks = breaks_Na,
       labels = c("Cuantil 1", "Cuantil 2", "Cuantil 3", "Cuantil 4", "Cuantil 5"),
       include.lowest = TRUE,
       right = FALSE
@@ -128,11 +170,11 @@ for(var in c("Na_mgl")) {
 }
 
 # 6. Paletas de colores
-# Paleta para CE (salinidad)
-colores_salinidad <- c('#00441b', '#a6dba0', '#9970ab', '#762a83')
+# Paleta para CE (salinidad) - incluir todas las 6 clases posibles
+colores_salinidad <- c('#00441b', '#a6dba0', '#ffffbf', '#9970ab', '#762a83', '#4d004b')
 pal_salinidad <- colorFactor(palette = colores_salinidad,
                              levels = c("No salina", "Ligeramente salina", "Moderadamente salina",
-                                       "Altamente salina"))
+                                       "Altamente salina", "Extremadamente salina", "Salmuera"))
 
 # Paleta para variables con límite de admisibilidad (Resolución 2115 de 2007)
 colores_admisibilidad <- c('#4d9221', '#d7191c')
@@ -146,27 +188,56 @@ pal_cuantiles <- colorFactor(palette = colores_cuantiles,
 
 # 7. Crear mapa base
 mapa <- leaflet(puntos) %>%
-  addProviderTiles(providers$CartoDB.Positron) %>%
+  addProviderTiles(providers$CartoDB.Voyager) |> 
+  addCircleMarkers(data = drm_points,color = 'white',radius = .5) |>
+  addPolygons(data = aoi,color = 'red',fill = F, weight = 2) |> # AOI DRM
   setView(lng = mean(st_coordinates(puntos)[,1], na.rm = TRUE), 
           lat = mean(st_coordinates(puntos)[,2], na.rm = TRUE), 
           zoom = 10)
 
 # 8. Añadir capas por variable
 for(var in variables) {
-  if(var %in% names(puntos)) {
-    
+  # Caso especial para CE_MHC que usa inv_2016
+  if(var == "CE_MHC" && "CE" %in% names(inv_2016)) {
+    # Calcular radio proporcional para inv_2016
+    valores_mhc <- inv_2016$CE
+    radios_mhc <- scales::rescale(valores_mhc, to = c(5, 20),
+                                  from = range(valores_mhc, na.rm = TRUE))
+    radios_mhc[is.na(radios_mhc)] <- 5
+
+    mapa <- mapa %>%
+      addCircleMarkers(
+        data = inv_2016,
+        group = "CE_MHC",
+        radius = radios_mhc,
+        color = "#000",
+        weight = 1,
+        fillColor = ~pal_salinidad(inv_2016$CE_clase),
+        fillOpacity = 0.7,
+        popup = ~paste0(
+          "<b>ID:</b> ", id_sgc, "<br>",
+          "<b>Municipio:</b> ", municipio, "<br>",
+          "<b>Tipo:</b> ", tipo_punto, "<br>",
+          "<b>Profundidad:</b> ", profund, "<br>",
+          "<b>Fecha:</b> ", fecha, "<br>",
+          "<b>CE:</b> ", round(CE, 2), " μS/cm<br>",
+          "<b>Clase:</b> ", CE_clase
+        )
+      )
+  } else if(var %in% names(puntos)) {
+
     # Calcular radio proporcional (normalizar entre 5 y 20)
     valores <- puntos[[var]]
-    radios <- scales::rescale(valores, to = c(5, 20), 
+    radios <- scales::rescale(valores, to = c(5, 20),
                               from = range(valores, na.rm = TRUE))
-    
+
     # Reemplazar NA con valor mínimo
     radios[is.na(radios)] <- 5
-    
+
     # Seleccionar paleta según la variable
     if(var == "CE") {
       pal_actual <- pal_salinidad
-    } else if(var %in% c("As_ugl", "Cd_ugl", "Pb_ugl", "F_mgL", "SO4_mgL", "Co_ugl")) {
+    } else if(var %in% c("Cl_mgL","As_ugl", "Cd_ugl", "Pb_ugl", "F_mgL", "SO4_mgL", "Co_ugl")) {
       pal_actual <- pal_admisibilidad
     } else {
       pal_actual <- pal_cuantiles
@@ -197,14 +268,25 @@ for(var in variables) {
 mapa <- mapa %>%
   addLayersControl(
     baseGroups = variables,
-    options = layersControlOptions(collapsed = FALSE)
+    options = layersControlOptions(collapsed = T)
   ) %>%
   hideGroup(variables[-1])
 
 # 10. Calcular rangos de valores para cada variable
 rangos_vars <- list()
 for(var in variables) {
-  if(var %in% names(puntos)) {
+  # Caso especial para CE_MHC
+  if(var == "CE_MHC" && "CE" %in% names(inv_2016)) {
+    valores <- inv_2016$CE
+    valores <- valores[!is.na(valores)]
+    if(length(valores) > 0) {
+      rangos_vars[["CE_MHC"]] <- list(
+        min = round(min(valores), 2),
+        max = round(max(valores), 2),
+        unit = "μS/cm"
+      )
+    }
+  } else if(var %in% names(puntos)) {
     valores <- puntos[[var]]
     valores <- valores[!is.na(valores)]
     if(length(valores) > 0) {
@@ -213,8 +295,8 @@ for(var in variables) {
         max = round(max(valores), 2),
         unit = case_when(
           var == "CE" ~ "μS/cm",
-          var %in% c("As_ugl", "Cd_ugl", "Co_ugl", "Pb_ugl") ~ "μg/L",
-          var %in% c("F_mgL", "SO4_mgL", "Na_mgl") ~ "mg/L",
+          var %in% c("Cl_mgL","Na_mgl","SO4_mgL","F_mgL" ) ~ "mg/L",
+          var %in% c("As_ugl" ,"Co_ugl","Pb_ugl","Cd_ugl") ~ "μg/L",
           TRUE ~ ""
         )
       )
@@ -224,6 +306,13 @@ for(var in variables) {
 
 # Convertir a JSON para JavaScript
 rangos_json <- jsonlite::toJSON(rangos_vars, auto_unbox = TRUE)
+
+# Convertir cuantiles de Sodio a JSON
+if(!is.null(cuantiles_Na)) {
+  cuantiles_Na_json <- jsonlite::toJSON(round(cuantiles_Na, 1), auto_unbox = FALSE)
+} else {
+  cuantiles_Na_json <- "null"
+}
 
 # 11. Agregar control HTML para la leyenda dinámica
 library(htmltools)
@@ -256,40 +345,44 @@ js_code <- HTML(paste0('
         categories: [
           {color: "#00441b", label: "No salina", range: "<700"},
           {color: "#a6dba0", label: "Ligeramente salina", range: "700-2000"},
-          {color: "#9970ab", label: "Moderadamente salina", range: "2000-10000"},
-          {color: "#762a83", label: "Altamente salina", range: "10000-25000"}
+          {color: "#ffffbf", label: "Moderadamente salina", range: "2000-10000"},
+          {color: "#9970ab", label: "Altamente salina", range: "10000-25000"},
+          {color: "#762a83", label: "Extremadamente salina", range: "25000-45000"},
+          {color: "#4d004b", label: "Salmuera", range: "≥45000"}
         ],
         footer: "Rhoades et al., 1992"
       },
-      "As_ugl": {
-        title: "Arsénico (μg/L)",
+      "CE_MHC": {
+        title: "Conductividad eléctrica MHC 2016 (μS·cm⁻¹)",
         categories: [
-          {color: "#4d9221", label: "Admisible", range: "<10"},
-          {color: "#d7191c", label: "No admisible", range: "≥10"}
+          {color: "#00441b", label: "No salina", range: "<700"},
+          {color: "#a6dba0", label: "Ligeramente salina", range: "700-2000"},
+          {color: "#ffffbf", label: "Moderadamente salina", range: "2000-10000"},
+          {color: "#9970ab", label: "Altamente salina", range: "10000-25000"},
+          {color: "#762a83", label: "Extremadamente salina", range: "25000-45000"},
+          {color: "#4d004b", label: "Salmuera", range: "≥45000"}
+        ],
+        footer: "Rhoades et al., 1992"
+      },
+      "Cl_mgL": {
+        title: "Cloruros (mg/L)",
+        categories: [
+          {color: "#4d9221", label: "Admisible", range: "<250"},
+          {color: "#d7191c", label: "No admisible", range: "≥250"}
         ],
         footer: "Resolución 2115 de 2007"
       },
-      "Cd_ugl": {
-        title: "Cadmio (μg/L)",
-        categories: [
-          {color: "#4d9221", label: "Admisible", range: "<3"},
-          {color: "#d7191c", label: "No admisible", range: "≥3"}
-        ],
-        footer: "Resolución 2115 de 2007"
+      "Na_mgl": {
+        title: "Sodio (mg/L)",
+        categories: [],  // Se llenará dinámicamente
+        footer: "Clasificación por cuantiles",
+        useQuantiles: true
       },
-      "Co_ugl": {
-        title: "Cobalto (μg/L)",
+      "SO4_mgL": {
+        title: "Sulfatos (mg/L)",
         categories: [
-          {color: "#4d9221", label: "Admisible", range: "<50"},
-          {color: "#d7191c", label: "No admisible", range: "≥50"}
-        ],
-        footer: "Decreto 1076 de 2015 (uso agrícola)"
-      },
-      "Pb_ugl": {
-        title: "Plomo (μg/L)",
-        categories: [
-          {color: "#4d9221", label: "Admisible", range: "<10"},
-          {color: "#d7191c", label: "No admisible", range: "≥10"}
+          {color: "#4d9221", label: "Admisible", range: "<250"},
+          {color: "#d7191c", label: "No admisible", range: "≥250"}
         ],
         footer: "Resolución 2115 de 2007"
       },
@@ -301,26 +394,42 @@ js_code <- HTML(paste0('
         ],
         footer: "Resolución 2115 de 2007"
       },
-      "SO4_mgL": {
-        title: "Sulfatos (mg/L)",
+      "As_ugl": {
+        title: "Arsénico (μg/L)",
         categories: [
-          {color: "#4d9221", label: "Admisible", range: "<250"},
-          {color: "#d7191c", label: "No admisible", range: "≥250"}
+          {color: "#4d9221", label: "Admisible", range: "<10"},
+          {color: "#d7191c", label: "No admisible", range: "≥10"}
         ],
         footer: "Resolución 2115 de 2007"
       },
-      "Na_mgl": {
-        title: "Sodio (mg/L)",
+      "Co_ugl": {
+        title: "Cobalto (μg/L)",
         categories: [
-          {color: "#2c7bb6", label: "Cuantil 1"},
-          {color: "#abd9e9", label: "Cuantil 2"},
-          {color: "#ffffbf", label: "Cuantil 3"},
-          {color: "#fdae61", label: "Cuantil 4"},
-          {color: "#d7191c", label: "Cuantil 5"}
+          {color: "#4d9221", label: "Admisible", range: "<50"},
+          {color: "#d7191c", label: "No admisible", range: "≥50"}
         ],
-        footer: "Clasificación por cuantiles"
+        footer: "Decreto 1076 de 2015 (Uso agrícola)"
+      },
+      "Cd_ugl": {
+        title: "Cadmio (μg/L)",
+        categories: [
+          {color: "#4d9221", label: "Admisible", range: "<3"},
+          {color: "#d7191c", label: "No admisible", range: "≥3"}
+        ],
+        footer: "Resolución 2115 de 2007"
+      },
+      "Pb_ugl": {
+        title: "Plomo (μg/L)",
+        categories: [
+          {color: "#4d9221", label: "Admisible", range: "<10"},
+          {color: "#d7191c", label: "No admisible", range: "≥10"}
+        ],
+        footer: "Resolución 2115 de 2007"
       }
     };
+
+    // Cuantiles de Sodio calculados desde R
+    var cuantilesNa = ', cuantiles_Na_json, ';
 
     // Función para actualizar la leyenda
     function updateLegend(varName) {
@@ -334,12 +443,25 @@ js_code <- HTML(paste0('
 
       var html = "<h4 style=\\"margin: 0 0 5px; font-size: 14px;\\">" + info.title + "</h4>";
 
-      info.categories.forEach(function(cat) {
-        var rangeText = cat.range ? " (" + cat.range + ")" : "";
-        html += "<div style=\\"margin: 2px 0;\\"><i style=\\"background:" + cat.color +
-                "; width: 18px; height: 18px; float: left; margin-right: 8px; opacity: 0.7;\\"></i>" +
-                cat.label + rangeText + "</div>";
-      });
+      // Si es Sodio, construir categorías dinámicamente con los cuantiles
+      if(info.useQuantiles && cuantilesNa && cuantilesNa.length === 6) {
+        var colores = ["#2c7bb6", "#abd9e9", "#ffffbf", "#fdae61", "#d7191c"];
+        for(var i = 0; i < 5; i++) {
+          var min = cuantilesNa[i];
+          var max = cuantilesNa[i+1];
+          html += "<div style=\\"margin: 2px 0;\\"><i style=\\"background:" + colores[i] +
+                  "; width: 18px; height: 18px; float: left; margin-right: 8px; opacity: 0.7;\\"></i>" +
+                  "Cuantil " + (i+1) + " (" + min + "-" + max + ")</div>";
+        }
+      } else {
+        // Para otras variables, usar las categorías definidas
+        info.categories.forEach(function(cat) {
+          var rangeText = cat.range ? " (" + cat.range + ")" : "";
+          html += "<div style=\\"margin: 2px 0;\\"><i style=\\"background:" + cat.color +
+                  "; width: 18px; height: 18px; float: left; margin-right: 8px; opacity: 0.7;\\"></i>" +
+                  cat.label + rangeText + "</div>";
+        });
+      }
 
       html += "<div style=\\"clear: both; margin-top: 5px;\\"><small>" + info.footer + "</small></div>";
       div.innerHTML = html;
@@ -389,13 +511,13 @@ js_code <- HTML(paste0('
 
       div.innerHTML = "<h4 style=\\"margin: 0 0 5px; font-size: 14px;\\">Tamaño del símbolo</h4>" +
         "<div style=\\"text-align: center;\\"><small>Proporcional al valor</small></div>" +
-        "<div style=\\"margin-top: 8px;\\"><svg width=\\"140\\" height=\\"60\\">" +
-        "<circle cx=\\"25\\" cy=\\"50\\" r=\\"5\\" fill=\\"#666\\" opacity=\\"0.5\\"/>" +
-        "<text x=\\"35\\" y=\\"53\\" font-size=\\"9\\">" + min.toFixed(1) + " " + unit + "</text>" +
-        "<circle cx=\\"25\\" cy=\\"30\\" r=\\"12\\" fill=\\"#666\\" opacity=\\"0.5\\"/>" +
-        "<text x=\\"42\\" y=\\"33\\" font-size=\\"9\\">" + mid.toFixed(0) + " " + unit + "</text>" +
-        "<circle cx=\\"25\\" cy=\\"25\\" r=\\"20\\" fill=\\"#666\\" opacity=\\"0.5\\"/>" +
-        "<text x=\\"50\\" y=\\"10\\" font-size=\\"9\\">" + max.toFixed(0) + " " + unit + "</text>" +
+        "<div style=\\"margin-top: 8px;\\"><svg width=\\"150\\" height=\\"110\\">" +
+        "<circle cx=\\"30\\" cy=\\"100\\" r=\\"5\\" fill=\\"#666\\" opacity=\\"0.5\\"/>" +
+        "<text x=\\"40\\" y=\\"103\\" font-size=\\"9\\">" + min.toFixed(1) + " " + unit + "</text>" +
+        "<circle cx=\\"30\\" cy=\\"65\\" r=\\"12\\" fill=\\"#666\\" opacity=\\"0.5\\"/>" +
+        "<text x=\\"47\\" y=\\"68\\" font-size=\\"9\\">" + mid.toFixed(0) + " " + unit + "</text>" +
+        "<circle cx=\\"30\\" cy=\\"25\\" r=\\"20\\" fill=\\"#666\\" opacity=\\"0.5\\"/>" +
+        "<text x=\\"55\\" y=\\"28\\" font-size=\\"9\\">" + max.toFixed(0) + " " + unit + "</text>" +
         "</svg></div>";
     }
 
@@ -410,11 +532,8 @@ js_code <- HTML(paste0('
   }, 1000);
 </script>
 '))
-
 mapa <- htmlwidgets::prependContent(mapa, js_code)
-
 # 12. Guardar
 saveWidget(mapa, path_map, selfcontained = TRUE)
-
-# Ver en navegador
+#Ver en navegador
 browseURL(path_map)
