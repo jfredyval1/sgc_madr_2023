@@ -227,7 +227,7 @@ triangleIcon <- makeIcon(
 
 # 7. Crear mapa base
 mapa <- leaflet(puntos) %>%
-  addProviderTiles(providers$Stadia.StamenTerrain) |> 
+  addProviderTiles(providers$CartoDB.VoyagerLabelsUnder) |> 
   addMarkers(lng = drm_points$X, 
              lat = drm_points$Y, 
              icon = triangleIcon)|>  # o triangleIcon
