@@ -13,6 +13,8 @@ path_map = '/home/jfvl/Documentos/Guajira/docs/index.html'
 
 # Lectura de área y puntos DRM para contexto espacial
 aoi <- st_read(path_gpkg, layer = "aoi_drm")
+# Drenaje doble
+drenaje <- st_read(path_gpkg, layer = "drenaje_doble")
 # Puntos muestroe DRM
 drm_points <- st_read(path_gpkg, layer = "drm_puntos")
 # MHC 2016 - Inventario
@@ -23,8 +25,18 @@ inv_2016 <- inv_2016[inv_2016$municipio == 'URIBIA',]
 names(inv_2016)[names(inv_2016) == 'ce'] <- 'CE'
 # Filtrar por muestras
 drm_points<- drm_points[drm_points$tipo_dato == 'Muestra',]
+# Estraer coordenadas
+drm_points <- cbind(drm_points,st_coordinates(drm_points))
 # Lectura de datos base puntuales
 inv <- st_read(path_gpkg, layer = "inventario")
+carbonatos <- st_read(path_gpkg, layer = "caracteristicas_agua", quiet = TRUE) %>% 
+  st_drop_geometry()  # No tiene geometría
+carbonatos <- carbonatos[!is.na(carbonatos$carbonatos),]
+# Espacializar  con inv
+carbonatos<- left_join(carbonatos,
+                       inv[,c("ID","geom")],
+                       by=c('fk_id_punto'='ID'))
+
 valores_fq <- st_read(path_gpkg, layer = "muestreo_fq", quiet = TRUE) %>% 
   st_drop_geometry()  # No tiene geometría
 # Renombrar CE por CE
@@ -44,8 +56,16 @@ datos_wide <- valores_fq %>%
 puntos <- inv %>%
   right_join(datos_wide, by = c("ID" = "fk_id_punto"))
 
+# 3.1 Agregar carbonatos desde caracteristicas_agua
+carbonatos_simple <- carbonatos %>%
+  st_drop_geometry() %>%
+  select(fk_id_punto, CO3_mgL = carbonatos)
+
+puntos <- puntos %>%
+  left_join(carbonatos_simple, by = c("ID" = "fk_id_punto"))
+
 # 4. Definir las variables a mapear
-variables <- c("CE","CE_MHC","Na_mgl","Cl_mgL","SO4_mgL","F_mgL", "As_ugl", "Co_ugl", "Pb_ugl","Cd_ugl" )
+variables <- c("CE","Na_mgl","Cl_mgL","SO4_mgL","F_mgL","CO3_mgL", "As_ugl", "Co_ugl", "Pb_ugl","Cd_ugl","CE_MHC" )
 
 # 5. Clasificar cada variable
 # 5.1 Clasificación especial para CE (Rhoades et al., 1992)
@@ -128,6 +148,17 @@ if("F_mgL" %in% names(puntos)) {
   )
 }
 
+# Carbonatos
+if("CO3_mgL" %in% names(puntos)) {
+  puntos$CO3_mgL_clase <- cut(
+    puntos$CO3_mgL,
+    breaks = c(0, 200, Inf),
+    labels = c("Admisible", "No admisible"),
+    include.lowest = TRUE,
+    right = FALSE
+  )
+}
+
 # Sulfatos
 if("SO4_mgL" %in% names(puntos)) {
   puntos$SO4_mgL_clase <- cut(
@@ -185,12 +216,23 @@ pal_admisibilidad <- colorFactor(palette = colores_admisibilidad,
 colores_cuantiles <- c("#2c7bb6", "#abd9e9", "#ffffbf", "#fdae61", "#d7191c")
 pal_cuantiles <- colorFactor(palette = colores_cuantiles,
                              levels = c("Cuantil 1", "Cuantil 2", "Cuantil 3", "Cuantil 4", "Cuantil 5"))
+# Cargar simbolos por DRM
+triangleIcon <- makeIcon(
+  iconUrl = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 20 20'%3E%3Cpolygon points='10,2 18,18 2,18' fill='black'/%3E%3C/svg%3E",
+  iconWidth = 10,
+  iconHeight = 10,
+  iconAnchorX = 10,
+  iconAnchorY = 10
+)
 
 # 7. Crear mapa base
 mapa <- leaflet(puntos) %>%
-  addProviderTiles(providers$CartoDB.Voyager) |> 
-  addCircleMarkers(data = drm_points,color = 'white',radius = .5) |>
+  addProviderTiles(providers$Stadia.StamenTerrain) |> 
+  addMarkers(lng = drm_points$X, 
+             lat = drm_points$Y, 
+             icon = triangleIcon)|>  # o triangleIcon
   addPolygons(data = aoi,color = 'red',fill = F, weight = 2) |> # AOI DRM
+  addPolygons(data = drenaje,color = 'blue',fill = T, weight = 2) |> # Dreajes Dobles
   setView(lng = mean(st_coordinates(puntos)[,1], na.rm = TRUE), 
           lat = mean(st_coordinates(puntos)[,2], na.rm = TRUE), 
           zoom = 10)
@@ -237,7 +279,7 @@ for(var in variables) {
     # Seleccionar paleta según la variable
     if(var == "CE") {
       pal_actual <- pal_salinidad
-    } else if(var %in% c("Cl_mgL","As_ugl", "Cd_ugl", "Pb_ugl", "F_mgL", "SO4_mgL", "Co_ugl")) {
+    } else if(var %in% c("Cl_mgL","As_ugl", "Cd_ugl", "Pb_ugl", "F_mgL", "CO3_mgL", "SO4_mgL", "Co_ugl")) {
       pal_actual <- pal_admisibilidad
     } else {
       pal_actual <- pal_cuantiles
@@ -295,7 +337,7 @@ for(var in variables) {
         max = round(max(valores), 2),
         unit = case_when(
           var == "CE" ~ "μS/cm",
-          var %in% c("Cl_mgL","Na_mgl","SO4_mgL","F_mgL" ) ~ "mg/L",
+          var %in% c("Cl_mgL","Na_mgl","SO4_mgL","F_mgL","CO3_mgL" ) ~ "mg/L",
           var %in% c("As_ugl" ,"Co_ugl","Pb_ugl","Cd_ugl") ~ "μg/L",
           TRUE ~ ""
         )
@@ -314,10 +356,10 @@ if(!is.null(cuantiles_Na)) {
   cuantiles_Na_json <- "null"
 }
 
-# 11. Agregar control HTML para la leyenda dinámica
+# 11. Agregar control HTML para la leyenda dinámica y título
 library(htmltools)
 
-# JavaScript para leyenda dinámica
+# JavaScript para título y leyenda dinámica
 js_code <- HTML(paste0('
 <script>
   // Esperar a que el mapa se cargue
@@ -391,6 +433,14 @@ js_code <- HTML(paste0('
         categories: [
           {color: "#4d9221", label: "Admisible", range: "<1"},
           {color: "#d7191c", label: "No admisible", range: "≥1"}
+        ],
+        footer: "Resolución 2115 de 2007"
+      },
+      "CO3_mgL": {
+        title: "Carbonatos (mg/L)",
+        categories: [
+          {color: "#4d9221", label: "Admisible", range: "<200"},
+          {color: "#d7191c", label: "No admisible", range: "≥200"}
         ],
         footer: "Resolución 2115 de 2007"
       },

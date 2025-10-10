@@ -34,17 +34,18 @@ names(ug)<-c('ug_cod','class_hg','geometry')
 #
 diagnstco<-st_read('/home/jfvl/Documentos/Guajira/Resultados_Consolidados2023/Diagnostico.shp')
 # Filtrar campos
-diagnstco<-diagnstco[,c("ID","Tipo_P","Fecha","Nombre_Pun","Sitio","Usos_agua","Prof_punto","pH","Cond_μS_c","Problemas_","geometry")]
+diagnstco<-diagnstco[,c("ID","Tipo_P","Fecha","Nombre_Pun","Sitio","Usos_agua","Prof_punto","pH","Cond_μS_c","Alcalini_1","Problemas_","geometry")]
+diagnstco$Alcalini_1[diagnstco$Alcalini_1 == 0]<- NA
 #
 # Separar ubicciones de resultados por fecha
 #
 captaciones <- diagnstco[,c("ID","Tipo_P","Nombre_Pun","Sitio","Usos_agua","Prof_punto","geometry")]
 # Caracteristicas
-caracteristicas <-st_drop_geometry(diagnstco)[,c("ID","Tipo_P","Fecha","pH","Cond_μS_c","Problemas_")]
+caracteristicas <-st_drop_geometry(diagnstco)[,c("ID","Tipo_P","Fecha","pH","Cond_μS_c","Alcalini_1","Problemas_")]
 # Eliminar tiplas sin datos
 caracteristicas <- caracteristicas[!is.na(caracteristicas$Cond_μS_c),]
 # Renombrar
-names(caracteristicas)<-c('fk_id_punto','tipo_punto','fecha','ph','ce','observaciones')
+names(caracteristicas)<-c('fk_id_punto','tipo_punto','fecha','ph','ce','carbonatos','observaciones')
 #
 # Muestreo FQ
 #
@@ -67,6 +68,7 @@ names(muestreo_fq)<-c('fk_id_punto','tipo_punto','fecha','ph','ce','observacione
 muestreo_fq$tipo_punto[grepl("tanque", muestreo_fq$observaciones, ignore.case = TRUE)] <- "tanque"
 muestreo_fq$tipo_punto[grepl("llave", muestreo_fq$observaciones, ignore.case = TRUE)] <- "tanque"
 muestreo_fq$tipo_punto[grepl("almacenamiento", muestreo_fq$observaciones, ignore.case = TRUE)] <- "tanque"
+# Añadir columna de carbonatos
 
 # Separar por momento
 caracteristicas$visita<-1
@@ -75,6 +77,10 @@ muestreo_fq$visita<-2
 caracteristicas$fecha<-dmy(caracteristicas$fecha)
 caracteristicas$fecha<-ymd(caracteristicas$fecha)
 muestreo_fq$fecha<-ymd(format(mdy_hms(muestreo_fq$fecha),"%Y/%m/%d"))
+# Incluir columnas vacia de carbonatos
+muestreo_fq$carbonatos <- NA
+# Reorndenas nuevamente
+muestreo_fq<-muestreo_fq[,c("fk_id_punto","tipo_punto","fecha","ph","ce","carbonatos","observaciones","visita")]
 # unificar
 caracteristicas_agua<-rbind(caracteristicas,muestreo_fq)
 # Forzar variales a numericas
@@ -92,13 +98,13 @@ summary(caracteristicas_agua$ce)
 #
 micro<-st_read('/home/jfvl/Documentos/Guajira/Resultados_Consolidados2023/Consolidado_FQ_Microbiologico.shp')
 # Filtrar
-micro = st_drop_geometry(micro)[,c("ID","fecha","Tipo_P","Conduct","As_ugl",'Cl_mgL',"Cd_ugl","Co_ugl","Pb_ugl","F_mgL","SO4_mgL","Na_mgl")]
+micro = st_drop_geometry(micro)[,c("ID","fecha","Tipo_P","Conduct","As_ugl",'Cl_mgL',"Cd_ugl","Co_ugl","Pb_ugl","F_mgL","SO4_mgL","Na_mgl",'HCO3_mgl')]
 # Transpoer tabla
 micro <- micro %>%
-  mutate(across(c(Conduct, As_ugl,Cl_mgL, Cd_ugl, Co_ugl, Pb_ugl, F_mgL, SO4_mgL, Na_mgl), 
+  mutate(across(c(Conduct, As_ugl,Cl_mgL, Cd_ugl, Co_ugl, Pb_ugl, F_mgL, SO4_mgL, Na_mgl,HCO3_mgl), 
                 as.character)) %>%
   pivot_longer(
-    cols = c(Conduct, As_ugl,Cl_mgL,Cd_ugl, Co_ugl, Pb_ugl, F_mgL, SO4_mgL, Na_mgl),
+    cols = c(Conduct, As_ugl,Cl_mgL,Cd_ugl, Co_ugl, Pb_ugl, F_mgL, SO4_mgL, Na_mgl,HCO3_mgl),
     names_to = "variable",
     values_to = "valor_texto"
   ) %>%
@@ -137,7 +143,7 @@ names(micro) = c("fk_id_punto","tipo_punto","fecha","variable","valor","censurad
 # Escribir puntos y tabla de caracteristicas
 #st_write(captaciones,'Documentos/Guajira/DRM.gpkg',layer='inventario')
 # Escribir tablas
-#st_write(caracteristicas_agua,'Documentos/Guajira/DRM.gpkg',layer='caracteristicas_agua')
+#st_write(caracteristicas_agua,'/home/jfvl/Documentos/Guajira/DRM.gpkg',layer='caracteristicas_agua')
 # Escribir 
 #st_write(micro,'/home/jfvl/Documentos/Guajira/DRM.gpkg',layer='muestreo_fq')
 #
@@ -170,4 +176,4 @@ inv$fecha <- ymd(inv$fecha)
 #
 # Guardar datos en GPKG
 # 
-st_write(inv,'/home/jfvl/Documentos/Guajira/DRM.gpkg',layer='inv_mhc_2016')
+#st_write(inv,'/home/jfvl/Documentos/Guajira/DRM.gpkg',layer='inv_mhc_2016')
